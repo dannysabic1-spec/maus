@@ -21,9 +21,16 @@ except ImportError:
 #              KONFIGURACIJA
 # ══════════════════════════════════════════════
 BOT_NAME   = "MONIKA BOT"
-VERSION    = "v4.5.5"
+VERSION    = "v4.6.0"
 TOKEN      = os.environ.get("DISCORD_TOKEN")
 BOT_PREFIX = "."
+COMMAND_PREFIXES = (BOT_PREFIX, ",")
+
+def get_message_prefix(content: str):
+    return next((prefix for prefix in COMMAND_PREFIXES if content.startswith(prefix)), None)
+
+def is_prefix_command(content: str) -> bool:
+    return get_message_prefix(content) is not None
 
 _LP = 0x2B2D31  # Sivo-crna dark boja za sve embed poruke
 
@@ -825,7 +832,7 @@ async def check_kanal(ctx: commands.Context, tip: str) -> bool:
 
 async def check_login_channel(message: discord.Message) -> bool:
     """Ako je podešen login kanal, prefix komande rade samo tamo."""
-    if not message.guild or not message.content.startswith(BOT_PREFIX):
+    if not message.guild or not is_prefix_command(message.content):
         return True
     channels = get_kanali(load_data(), message.guild.id)
     login_id = channels.get("login")
@@ -1061,7 +1068,7 @@ intents.message_content = True
 intents.members         = True
 intents.reactions       = True
 
-bot = commands.Bot(command_prefix=BOT_PREFIX, intents=intents, help_command=None)
+bot = commands.Bot(command_prefix=COMMAND_PREFIXES, intents=intents, help_command=None)
 
 # Zaštiti slash komande od ponovne obrade istog Discord interaction ID-a.
 PROCESSED_SLASH_INTERACTIONS = {}
@@ -2477,8 +2484,9 @@ async def on_message(message: discord.Message):
     """Ručno proslijedi poruke command handleru i Moniki."""
     if message.author.bot:
         return
-    if message.guild and message.content.startswith(BOT_PREFIX):
-        command_name = message.content[len(BOT_PREFIX):].split(maxsplit=1)[0].lower()
+    message_prefix = get_message_prefix(message.content)
+    if message.guild and message_prefix:
+        command_name = message.content[len(message_prefix):].split(maxsplit=1)[0].lower()
         ctx = await bot.get_context(message)
         if command_name == "pomoc":
             if not await check_pomoc_channel(ctx):
@@ -2491,7 +2499,7 @@ async def on_message(message: discord.Message):
     PROCESSED_GAME_MESSAGE_IDS.add(message.id)
     if len(PROCESSED_GAME_MESSAGE_IDS) > 10000:
         PROCESSED_GAME_MESSAGE_IDS.clear()
-    if message.content.startswith(BOT_PREFIX):
+    if is_prefix_command(message.content):
         print(f"[COMMAND] Primljena prefix komanda: {message.content.split()[0]}")
     else:
         # U posebnim kanalima članovi mogu slati samo broj ili riječ.
@@ -2553,7 +2561,7 @@ async def on_message(message: discord.Message):
                     return
         # Monika radi samo u kanalu koji je administrator uključio.
         # Ne presreće prefix komande i ne odgovara na svaku običnu poruku.
-        if not message.content.startswith(BOT_PREFIX):
+        if not is_prefix_command(message.content):
             data = load_data()
             monika_cfg = get_monika(data, message.guild.id) if message.guild else {}
             if monika_cfg.get("channel_id") == message.channel.id and monika_should_reply(message):
@@ -6165,7 +6173,7 @@ def pomoc_pages():
                 "> `.counting 1` — Zajedničko brojanje\n"
                 "> `.toplo-hladno [broj]` — Pogodi broj\n"
                 "> `.kaladont [riječ]` — Igra riječima\n"
-                "> `.xo @Korisnik` — XO duel na klik kroz dugmad\n"
+                "> `,-xo @Korisnik` ili `.xo @Korisnik` — XO duel na klik kroz dugmad\n"
                 "> `.pijte` · `.film` · `.istina` · `.izazov`\n"
                 "> `.ljubavni-test @Korisnik` · `.compatibility @Korisnik`\n\n"
                 "> **Rang-liste**\n"
@@ -6453,6 +6461,7 @@ def game_embed(title: str, lines, footer: str = None):
 
 XO_ACTIVE_GAMES = {}
 XO_CREATE_LOCK = asyncio.Lock()
+XO_DURATION_SECONDS = 120
 XO_WIN_LINES = (
     (0, 1, 2), (3, 4, 5), (6, 7, 8),
     (0, 3, 6), (1, 4, 7), (2, 5, 8),
@@ -6479,8 +6488,8 @@ class GamesMenuView(discord.ui.View):
     @discord.ui.button(label="XO", emoji="❌", style=discord.ButtonStyle.primary, row=0)
     async def xo_info(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
-            "Pokreni duel dugmetom: `/xo` izaberi protivnika, ili "
-            "upiši `.xo @član`. Oba igrača zatim klikću polja na tabli.",
+            "Pokreni duel sa `,-xo @član`, `.xo @član` ili `/xo`. "
+            "Svaka partija ima svoju tablu i traje najviše 2 minuta.",
             ephemeral=True,
         )
 
@@ -6518,16 +6527,19 @@ class TicTacToeView(discord.ui.View):
     """XO tabla za dva člana; potezi se prave klikom na dugmad."""
 
     def __init__(self, player_x: discord.abc.User, player_o: discord.abc.User, channel_id: int):
-        super().__init__(timeout=180)
+        super().__init__(timeout=None)
         self.player_x = player_x
         self.player_o = player_o
         self.current_player = player_x
         self.channel_id = channel_id
         self.game_id = uuid.uuid4().hex[:12]
+        self.deadline = asyncio.get_running_loop().time() + XO_DURATION_SECONDS
+        self.expires_at = int(datetime.now(timezone.utc).timestamp()) + XO_DURATION_SECONDS
         self.board = [None] * 9
         self.finished = False
         self.result = None
         self.message = None
+        self.expiry_task = None
         self.move_lock = asyncio.Lock()
         for index in range(9):
             button = discord.ui.Button(
@@ -6541,11 +6553,26 @@ class TicTacToeView(discord.ui.View):
 
     def make_embed(self):
         description = (
-            f"{self.player_x.mention} izazvao/la je {self.player_o.mention}"
+            f"{self.player_x.mention} **X**  protiv  "
+            f"{self.player_o.mention} **O**"
         )
-        # Embed prikazuje samo ko je koga izazvao; polja 1–9 su isključivo
-        # klikabilna dugmad ispod njega.
-        return discord.Embed(description=description, color=_LP)
+        if self.result:
+            description += f"\n\n{self.result}"
+        elif not self.finished:
+            description += (
+                f"\n\nNa potezu: {self.current_player.mention}"
+                f"\n⏳ Partija važi do <t:{self.expires_at}:R>."
+            )
+        # Kompaktan embed; sama tabla ostaje u zasebnim dugmadima ispod.
+        return discord.Embed(title="XO duel", description=description, color=_LP)
+
+    def start_expiry_timer(self):
+        self.expiry_task = asyncio.create_task(self.expire_after_timeout())
+
+    def cancel_expiry_timer(self):
+        task = self.expiry_task
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
 
     def _refresh_buttons(self):
         for button in self.children:
@@ -6580,6 +6607,15 @@ class TicTacToeView(discord.ui.View):
             if self.finished:
                 await interaction.response.send_message("Ova partija je završena.", ephemeral=True)
                 return
+            if asyncio.get_running_loop().time() >= self.deadline:
+                self.finished = True
+                self.result = "⏰ Vrijeme je isteklo — ova partija više ne važi."
+                self._refresh_buttons()
+                XO_ACTIVE_GAMES.pop(self.game_id, None)
+                self.cancel_expiry_timer()
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+                self.stop()
+                return
             if interaction.user.id != self.current_player.id:
                 await interaction.response.send_message("Sada je potez drugog igrača.", ephemeral=True)
                 return
@@ -6607,27 +6643,52 @@ class TicTacToeView(discord.ui.View):
             self._refresh_buttons()
             await interaction.response.edit_message(embed=self.make_embed(), view=self)
             if self.finished:
-                XO_ACTIVE_GAMES.pop(self.channel_id, None)
+                XO_ACTIVE_GAMES.pop(self.game_id, None)
+                self.cancel_expiry_timer()
+                if winning_line:
+                    winner_embed = discord.Embed(
+                        title="🏆 Pobjeda u XO!",
+                        description=f"{interaction.user.mention} je pobijedio/la!",
+                        color=_LP,
+                    )
+                    try:
+                        await self.message.channel.send(
+                            embed=winner_embed,
+                            allowed_mentions=discord.AllowedMentions(
+                                users=[interaction.user],
+                                replied_user=False,
+                            ),
+                        )
+                    except discord.HTTPException as exc:
+                        print(f"[XO] Nije poslat embed pobjednika: {exc}")
+                self.stop()
 
-    async def on_timeout(self):
-        if self.finished:
+    async def expire_after_timeout(self):
+        try:
+            remaining = max(
+                0,
+                self.deadline - asyncio.get_running_loop().time(),
+            )
+            await asyncio.sleep(remaining)
+            async with self.move_lock:
+                if self.finished:
+                    return
+                self.finished = True
+                self.result = "⏰ Vrijeme je isteklo — ova partija više ne važi."
+                self._refresh_buttons()
+                XO_ACTIVE_GAMES.pop(self.game_id, None)
+                if self.message:
+                    try:
+                        await self.message.edit(embed=self.make_embed(), view=self)
+                    except discord.HTTPException as exc:
+                        print(f"[XO] Ne mogu ažurirati istekli panel: {exc}")
+                self.stop()
+        except asyncio.CancelledError:
             return
-        self.finished = True
-        self.result = "⏰ Partija je istekla jer nije bilo poteza tri minute."
-        self._refresh_buttons()
-        XO_ACTIVE_GAMES.pop(self.channel_id, None)
-        if self.message:
-            try:
-                await self.message.edit(embed=self.make_embed(), view=self)
-            except discord.HTTPException as exc:
-                print(f"[XO] Ne mogu ažurirati istekli panel: {exc}")
 
 async def post_xo_game(channel, player_x: discord.abc.User, player_o: discord.abc.User):
-    """Objavi novu XO tablu ako u kanalu već nema aktivne partije."""
+    """Objavi nezavisnu XO tablu; više partija može trajati u istom kanalu."""
     async with XO_CREATE_LOCK:
-        current = XO_ACTIVE_GAMES.get(channel.id)
-        if current and not current.finished:
-            return None
         view = TicTacToeView(player_x, player_o, channel.id)
         message = await channel.send(
             embed=view.make_embed(),
@@ -6635,7 +6696,8 @@ async def post_xo_game(channel, player_x: discord.abc.User, player_o: discord.ab
             allowed_mentions=discord.AllowedMentions.none(),
         )
         view.message = message
-        XO_ACTIVE_GAMES[channel.id] = view
+        XO_ACTIVE_GAMES[view.game_id] = view
+        view.start_expiry_timer()
         return view
 
 async def react_to_game_input(
@@ -6741,21 +6803,24 @@ async def igre_prefix(ctx: commands.Context):
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
-@bot.command(name="xo")
+@bot.command(name="xo", aliases=["-xo"])
 async def xo_prefix(ctx: commands.Context, protivnik: discord.Member = None):
     """Pokreni XO duel koji se igra klikom na tablu."""
     if ctx.guild is None:
         await ctx.send("XO se može pokrenuti na Discord serveru.")
         return
     if protivnik is None:
-        await ctx.send("Upotreba: `.xo @član` — izazovi člana na XO duel.")
+        await ctx.send(
+            "Upotreba: `,-xo @član` — izazovi člana na XO duel. "
+            "Svaka partija traje najviše 2 minuta."
+        )
         return
     if protivnik.id == ctx.author.id or protivnik.bot:
         await ctx.send("Izaberi drugog člana servera koji nije bot.")
         return
     view = await post_xo_game(ctx.channel, ctx.author, protivnik)
     if view is None:
-        await ctx.send("U ovom kanalu već postoji aktivna XO partija.")
+        await ctx.send("XO tabla nije mogla biti pokrenuta. Pokušaj ponovo.")
 
 @bot.tree.command(name="xo", description="Pokreni XO duel koji se igra klikom")
 @app_commands.describe(protivnik="Član servera kojeg izazivaš")
@@ -7206,7 +7271,7 @@ async def giveaways(ctx: commands.Context):
     save_data(data)
     GIVEAWAY_TASKS[giveaway_id] = asyncio.create_task(finish_giveaway(giveaway_id))
 
-@bot.command(name="poruka")
+@bot.command(name="poruka", aliases=["poruke"])
 async def poruka(
     ctx: commands.Context,
     server_link: str = None,
@@ -7214,7 +7279,7 @@ async def poruka(
 ):
     """Vlasnik bota ili servera šalje najviše 100 pozivnica u DM."""
     if ctx.guild is None:
-        await ctx.send("Komandu `.poruka` pokreni u kanalu servera.", delete_after=8)
+        await ctx.send("Komandu `.poruka` ili `.poruke` pokreni u kanalu servera.", delete_after=8)
         return
 
     try:
@@ -7232,8 +7297,9 @@ async def poruka(
 
     if not server_link:
         await ctx.send(
-            "Upotreba: `.poruka <link-servera> [broj 1-100]`\n"
-            "Primjer: `.poruka https://discord.gg/tvoj-link 100`",
+            "Upotreba: `.poruka <link-servera> [broj 1-100]` "
+            "ili `.poruke <link-servera> [broj 1-100]`.\n"
+            "Primjer: `.poruke https://discord.gg/tvoj-link 100`",
             delete_after=12,
         )
         return
@@ -7294,10 +7360,15 @@ async def poruka(
     if ctx.guild.icon:
         embed.set_thumbnail(url=ctx.guild.icon.url)
 
-    status_message = await ctx.send(
-        f"Počinjem slati pozivnicu u DM za najviše **{limit} članova** "
-        f"servera **{ctx.guild.name}**..."
+    status_embed = discord.Embed(
+        title="✉️ Slanje pozivnice",
+        description=(
+            f"Počinjem slanje u privatne poruke za najviše **{limit} članova** "
+            f"servera **{ctx.guild.name}**."
+        ),
+        color=_LP,
     )
+    status_message = await ctx.send(embed=status_embed)
     poslato = 0
     preskoceno = 0
     pokusano = 0
@@ -7335,25 +7406,42 @@ async def poruka(
         print(f"[PORUKA] Učitavanje članova nije uspjelo: {exc}")
 
     if ucitavanje_greska and poslato == 0 and preskoceno == 0:
-        final_text = (
-            "Nisam mogao učitati članove servera, pa poruka nije poslata. "
-            "U Discord Developer Portal uključi **Server Members Intent**, "
-            "sačuvaj promjenu i restartuj bota."
+        final_embed = discord.Embed(
+            title="⚠️ Slanje nije pokrenuto",
+            description=(
+                "Nisam mogao učitati članove servera, pa poruka nije poslata. "
+                "U Discord Developer Portalu uključi **Server Members Intent**, "
+                "sačuvaj promjenu i restartuj bota."
+            ),
+            color=_LP,
         )
     else:
-        final_text = (
-            f"Slanje završeno. Pokušano: **{pokusano}/{limit}**, poslato: "
-            f"**{poslato}**, botovi preskočeni: "
-            f"**{preskoceno}**, Discord odbio privatnu poruku: **{dm_odbijeno}**."
-        )
+        description = f"Slanje privatnih pozivnica za **{ctx.guild.name}** je završeno."
         if dm_http_greske:
-            final_text += (
-                f" Ostale HTTP greške pri slanju: **{dm_http_greske}**"
+            description += (
+                f"\nOstale HTTP greške: **{dm_http_greske}**"
                 + (f" (prva: {prva_dm_greska})." if prva_dm_greska else ".")
             )
         if ucitavanje_greska:
-            final_text += " Učitavanje članova je prekinuto; dio članova možda nije obrađen."
-    await status_message.edit(content=final_text)
+            description += "\nUčitavanje članova je prekinuto; dio članova možda nije obrađen."
+        final_embed = discord.Embed(
+            title=(
+                "⚠️ Slanje završeno"
+                if dm_http_greske or ucitavanje_greska
+                else "✅ Slanje završeno"
+            ),
+            description=description,
+            color=_LP,
+        )
+        for label, value in (
+            ("Pokušano", f"{pokusano}/{limit}"),
+            ("Poslato", str(poslato)),
+            ("Botovi preskočeni", str(preskoceno)),
+            ("DM odbijen", str(dm_odbijeno)),
+        ):
+            final_embed.add_field(name=label, value=value, inline=True)
+    final_embed.set_footer(text=f"{BOT_NAME} • .poruka / .poruke")
+    await status_message.edit(content=None, embed=final_embed)
 
 @bot.tree.command(name="opis", description="[OWNER] Objavi kompletno uputstvo za korištenje bota")
 async def opis_slash(interaction: discord.Interaction):
@@ -7483,7 +7571,7 @@ async def opis_slash(interaction: discord.Interaction):
                 "> `.toplo-hladno <broj>` — Pošalji pokušaj u aktivnoj rundi.\n"
                 "> `.kaladont` — Pokreni igru riječima.\n"
                 "> `.kaladont <riječ>` — Pošalji riječ koja počinje zadnja dva slova.\n"
-                "> `.xo @Korisnik` ili `/xo` — Igraj XO potezima na dugmad.\n"
+                "> `,-xo @Korisnik`, `.xo @Korisnik` ili `/xo` — XO potezima na dugmad; partija traje 2 minuta.\n"
                 "> `.pijte` — Pokreni zabavnu poruku za društvo.\n"
                 "> `.film` — Pokreni izbor filma.\n"
                 "> `.istina` — Dobij pitanje istine.\n"
@@ -7555,7 +7643,7 @@ async def komande_slash(interaction: discord.Interaction):
             "> `.counting [broj]`",
             "> `.toplo-hladno [broj]`",
             "> `.kaladont [riječ]`",
-            "> `.xo @Korisnik` ili `/xo` — XO na dugmad",
+            "> `,-xo @Korisnik`, `.xo @Korisnik` ili `/xo` — XO na dugmad; 2 minuta",
             "> `.ekonomija`",
             "> ",
             "> Ljubav: `.veza` · `.profil` · `.brak` · `.prsten` · `.svadba`",

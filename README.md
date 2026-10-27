@@ -1,4 +1,4 @@
-# MONIKA BOT v4.5.5
+# MONIKA BOT v4.6.0
 
 Pakovanje sadrži novu kopiju bota sa standardnim Unicode emoji-jima, klikabilnim menijem mini-igara i multiplayer XO igrom koja se igra preko dugmadi.
 
@@ -22,7 +22,7 @@ Pri prvom pokretanju bot pravi `ljubav_data.json` i rezervnu kopiju `ljubav_data
 
 3. U Discord Developer Portalu napravi aplikaciju i bota, pa ga pozovi na server sa `bot` i `applications.commands` scope-ovima.
 4. U **Bot → Privileged Gateway Intents** uključi:
-   - **Message Content Intent** — prefix komande koje počinju tačkom i igre koje čitaju poruke.
+    - **Message Content Intent** — prefix komande (`.` i `,`) i igre koje čitaju poruke.
    - **Server Members Intent** — welcome sistem, članstvo i slanje pozivnica.
 5. Postavi bot token kao tajnu/environment varijablu pod imenom `DISCORD_TOKEN`. U Replitu koristi **Secrets**; nemoj upisivati token u skriptu niti ga slati u chat.
 6. Pokreni:
@@ -35,19 +35,21 @@ Slash komande se sinhronizuju pri pokretanju. Može biti potrebno kratko vreme d
 
 ## XO — igra na klik
 
-- Pokreni `.xo @član` ili `/xo` i izaberi protivnika.
+- Pokreni `,-xo @član`, `.xo @član` ili `/xo`.
 - Izazivač igra **X**, označeni član igra **O**.
 - Igrači klikću dugmad 1–9 ispod table; samo igrač koji je na potezu može odigrati.
-- XO embed prikazuje samo ko je koga izazvao. Brojevi 1–9 su samo klikabilna dugmad ispod embeda; X/O se vide na njima posle poteza.
+- Svaka komanda napravi svoju nezavisnu tablu, uključujući više partija u istom kanalu.
+- Svaka partija traje tačno 2 minuta od pokretanja. Po isteku dugmad se zaključavaju i partija više ne važi.
+- Embed prikazuje igrače, ko je na potezu i vreme isteka; X/O se vide na dugmadima posle poteza.
 - Pobeđuje prvi sa tri znaka u redu. Ako se tabla popuni, partija je nerešena.
-- U jednom kanalu može biti jedna aktivna XO partija. Neaktivna partija ističe posle 3 minuta.
+- Posle pobede bot šalje poseban embed i taguje pobednika.
 - Tabla je javna u kanalu da oba igrača mogu da igraju. Ostali članovi ne mogu praviti poteze.
 
 ## Meni igara
 
 Koristi `.igre` ili `/igre`. Dugmad prikazuju kratka uputstva za:
 
-- **XO** — klikabilna tabla pokreće se sa `.xo @član` ili `/xo`.
+- **XO** — klikabilna tabla pokreće se sa `,-xo @član`, `.xo @član` ili `/xo`.
 - **Casino** — `.casino coin 50` ili `.casino slot 50`.
 - **Counting** — `.counting 1`, pa članovi šalju sledeće brojeve.
 - **Toplo-hladno** — `.toplo-hladno`, pa pokušaji od 1 do 100.
@@ -66,13 +68,13 @@ Poruke i dugmad koriste standardne Unicode emoji-je — ne zavise od uploadovani
 - Kuća, sobe, namještaj, ribolov i rang-liste.
 - Mini-igre, giveaway paneli i Monika chat izazovi.
 - Welcome poruke, automatska uloga, info paneli, staff prijave, privatni ticketi i report sistem.
-- Prefix komande počinju sa `.`; administratorske postavke su uglavnom slash komande.
+- Prefix komande rade sa `.` ili `,`; XO ima i kraći oblik `,-xo @član`. Administratorske postavke su uglavnom slash komande.
 
 ## Discord dozvole
 
 Za punu funkcionalnost botu trebaju dozvole da vidi kanale, šalje poruke i embedove, čita istoriju, koristi reakcije, upravlja kanalima i upravlja ulogama. Za automatsku ulogu botova uloga mora biti iznad uloge koja se dodeljuje. Ograniči dozvole na kanale i mogućnosti koje stvarno koristiš.
 
-Komanda `.poruka` šalje pozivnicu servera kroz privatne poruke, najviše 100 članova po pokretanju, i dostupna je samo vlasniku bota ili servera. Pozivna poruka ima klikabilan link i pregled servera bez spiska bot komandi; ističe dnevne evente, nagrade, Nitro, dekoracije, igre i druženje. Link se zadaje uz postojeću komandu, na primer `.poruka https://discord.gg/tvoj-link 100`. Koristi je samo u skladu sa pravilima Discorda i očekivanjima članova.
+Komande `.poruka` i `.poruke` su aliasi: šalju pozivnicu servera kroz privatne poruke, najviše 100 članova po pokretanju, i dostupne su samo vlasniku bota ili servera. Pozivna poruka ima klikabilan link i pregled servera bez spiska bot komandi; rezultat slanja se prikazuje u kompaktnom embedu. Primer: `.poruke https://discord.gg/tvoj-link 100`. Koristi ih samo u skladu sa pravilima Discorda i očekivanjima članova.
 
 ## Napomene
 
