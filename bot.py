@@ -153,7 +153,13 @@ EMOJI_FALLBACKS = {
 
 # Koristi standardne Unicode emoji-je u porukama i dugmadima.
 # Imena iz ranijih custom emoji zapisa ostaju mapirana samo radi konverzije
-# starih tekstova; bot više ne učitava niti šalje custom emoji-je.
+# starih tekstova. .poruka koristi mali, odabrani skup app emoji-ja.
+APP_CUSTOM_EMOJI = CUSTOM_EMOJI.copy()
+PORUKA_CUSTOM_EMOJI = {
+    key: APP_CUSTOM_EMOJI[key]
+    for key in ("sparkles", "heart", "ticket", "calendar", "gift", "rocket", "game", "users", "mail", "check")
+}
+PORUKA_CUSTOM_EMOJI_MARKUP = set(PORUKA_CUSTOM_EMOJI.values())
 CUSTOM_EMOJI_NAME_TO_UNICODE = {}
 for _key, _value in CUSTOM_EMOJI.items():
     _match = re.match(r"<a?:([^:>]+):\d+>$", _value)
@@ -266,9 +272,13 @@ def _remove_embed_blockquotes(value):
     if isinstance(value, str):
         # Prevedi preostale stare custom zapise, ali sačuvaj obične emoji-je.
         value = re.sub(
-            r"<a?:([^:>]+):\d+>",
-            lambda match: CUSTOM_EMOJI_NAME_TO_UNICODE.get(
-                match.group(1).lower(), "🔹"
+            r"<a?:([^:>]+):(\d+)>",
+            lambda match: (
+                match.group(0)
+                if match.group(0) in PORUKA_CUSTOM_EMOJI_MARKUP
+                else CUSTOM_EMOJI_NAME_TO_UNICODE.get(
+                    match.group(1).lower(), "🔹"
+                )
             ),
             value,
         )
@@ -6537,6 +6547,7 @@ class TicTacToeView(discord.ui.View):
         self.expires_at = int(datetime.now(timezone.utc).timestamp()) + XO_DURATION_SECONDS
         self.board = [None] * 9
         self.finished = False
+        self.expired = False
         self.result = None
         self.message = None
         self.expiry_task = None
@@ -6552,19 +6563,19 @@ class TicTacToeView(discord.ui.View):
             self.add_item(button)
 
     def make_embed(self):
+        if self.expired:
+            time_text = "isteklo"
+        elif self.finished:
+            time_text = "završeno"
+        else:
+            # Discord sam odbrojava relativni timestamp do isteka.
+            time_text = f"<t:{self.expires_at}:R>"
         description = (
-            f"{self.player_x.mention} **X**  protiv  "
-            f"{self.player_o.mention} **O**"
+            f"> {self.player_x.mention} izazvao/la je {self.player_o.mention}\n"
+            f"> ⏱️ Time: {time_text}"
         )
-        if self.result:
-            description += f"\n\n{self.result}"
-        elif not self.finished:
-            description += (
-                f"\n\nNa potezu: {self.current_player.mention}"
-                f"\n⏳ Partija važi do <t:{self.expires_at}:R>."
-            )
-        # Kompaktan embed; sama tabla ostaje u zasebnim dugmadima ispod.
-        return discord.Embed(title="XO duel", description=description, color=_LP)
+        # Bez naslova i dodatnih pravila: samo izazov i odbrojavanje.
+        return discord.Embed(description=description, color=_LP)
 
     def start_expiry_timer(self):
         self.expiry_task = asyncio.create_task(self.expire_after_timeout())
@@ -6609,6 +6620,7 @@ class TicTacToeView(discord.ui.View):
                 return
             if asyncio.get_running_loop().time() >= self.deadline:
                 self.finished = True
+                self.expired = True
                 self.result = "⏰ Vrijeme je isteklo — ova partija više ne važi."
                 self._refresh_buttons()
                 XO_ACTIVE_GAMES.pop(self.game_id, None)
@@ -6648,7 +6660,7 @@ class TicTacToeView(discord.ui.View):
                 if winning_line:
                     winner_embed = discord.Embed(
                         title="🏆 Pobjeda u XO!",
-                        description=f"{interaction.user.mention} je pobijedio/la!",
+                        description=f"> {interaction.user.mention} je pobijedio/la!",
                         color=_LP,
                     )
                     try:
@@ -6674,6 +6686,7 @@ class TicTacToeView(discord.ui.View):
                 if self.finished:
                     return
                 self.finished = True
+                self.expired = True
                 self.result = "⏰ Vrijeme je isteklo — ova partija više ne važi."
                 self._refresh_buttons()
                 XO_ACTIVE_GAMES.pop(self.game_id, None)
@@ -7279,7 +7292,7 @@ async def poruka(
 ):
     """Vlasnik bota ili servera šalje najviše 100 pozivnica u DM."""
     if ctx.guild is None:
-        await ctx.send("Komandu `.poruka` ili `.poruke` pokreni u kanalu servera.", delete_after=8)
+        await ctx.send("> Komandu `.poruka` ili `.poruke` pokreni u kanalu servera.", delete_after=8)
         return
 
     try:
@@ -7290,22 +7303,22 @@ async def poruka(
     is_guild_owner = ctx.author.id == ctx.guild.owner_id
     if not (is_bot_owner or is_guild_owner):
         await ctx.send(
-            "Ovu komandu može koristiti vlasnik bota ili vlasnik ovog servera.",
+            "> Ovu komandu može koristiti vlasnik bota ili vlasnik ovog servera.",
             delete_after=12,
         )
         return
 
     if not server_link:
         await ctx.send(
-            "Upotreba: `.poruka <link-servera> [broj 1-100]` "
+            "> Upotreba: `.poruka <link-servera> [broj 1-100]` "
             "ili `.poruke <link-servera> [broj 1-100]`.\n"
-            "Primjer: `.poruke https://discord.gg/tvoj-link 100`",
+            "> Primjer: `.poruke https://discord.gg/tvoj-link 100`",
             delete_after=12,
         )
         return
     if not 1 <= limit <= 100:
         await ctx.send(
-            "Broj mora biti između **1 i 100**. Discord može odbiti DM "
+            "> Broj mora biti između **1 i 100**. Discord može odbiti DM "
             "članovima koji ne dozvoljavaju privatne poruke.",
             delete_after=12,
         )
@@ -7323,37 +7336,39 @@ async def poruka(
         re.IGNORECASE,
     ):
         await ctx.send(
-            "Link mora biti Discord invite link, npr. "
+            "> Link mora biti Discord invite link, npr. "
             "`https://discord.gg/tvoj-link`.",
             delete_after=12,
         )
         return
 
     embed = discord.Embed(
-        title=f"🌟 Dobro došao/la u {ctx.guild.name}!",
+        title=f"{PORUKA_CUSTOM_EMOJI['sparkles']} Dobro došao/la u {ctx.guild.name}!",
         description=(
-            "✨ Baš nam je drago što si ovde! Upoznaj ekipu, uključi se u "
-            "zajedničke aktivnosti i napravi lepe uspomene. 🤍\n\n"
-            f"[🎟️ Tvoj poziv na server — klikni ovde]({server_link})\n\n"
-            "🌸 Jedva čekamo da te upoznamo!"
+            f"> {PORUKA_CUSTOM_EMOJI['heart']} Baš nam je drago što si ovde! "
+            "Upoznaj ekipu, uključi se u zajedničke aktivnosti i napravi lepe uspomene.\n"
+            ">\n"
+            f"> {PORUKA_CUSTOM_EMOJI['ticket']} [Tvoj poziv na server — klikni ovde]({server_link})\n"
+            ">\n"
+            f"> {PORUKA_CUSTOM_EMOJI['sparkles']} Jedva čekamo da te upoznamo!"
         ),
         color=_LP,
     )
     embed.add_field(
-        name="🗓️ Događaji i nagrade",
+        name=f"{PORUKA_CUSTOM_EMOJI['calendar']} Događaji i nagrade",
         value=(
-            "📅 Dnevni eventi i druženja\n"
-            "🎁 Nagrade i posebna iznenađenja\n"
-            "🚀 Nitro nagrade i giveaway-i"
+            f"> {PORUKA_CUSTOM_EMOJI['calendar']} Dnevni eventi i druženja\n"
+            f"> {PORUKA_CUSTOM_EMOJI['gift']} Nagrade i posebna iznenađenja\n"
+            f"> {PORUKA_CUSTOM_EMOJI['rocket']} Nitro nagrade i giveaway-i"
         ),
         inline=False,
     )
     embed.add_field(
-        name="✨ Još mnogo toga",
+        name=f"{PORUKA_CUSTOM_EMOJI['sparkles']} Još mnogo toga",
         value=(
-            "🎨 Dekoracije, posebne role i tematski sadržaji\n"
-            "🎮 Igre, razgovori i mnogo lepih trenutaka\n"
-            "🤝 Nova poznanstva i ekipa koja je tu za tebe"
+            "> 🎨 Dekoracije, posebne role i tematski sadržaji\n"
+            f"> {PORUKA_CUSTOM_EMOJI['game']} Igre, razgovori i mnogo lepih trenutaka\n"
+            f"> {PORUKA_CUSTOM_EMOJI['users']} Nova poznanstva i ekipa koja je tu za tebe"
         ),
         inline=False,
     )
@@ -7361,9 +7376,9 @@ async def poruka(
         embed.set_thumbnail(url=ctx.guild.icon.url)
 
     status_embed = discord.Embed(
-        title="✉️ Slanje pozivnice",
+        title=f"{PORUKA_CUSTOM_EMOJI['mail']} Slanje pozivnice",
         description=(
-            f"Počinjem slanje u privatne poruke za najviše **{limit} članova** "
+            f"> Počinjem slanje u privatne poruke za najviše **{limit} članova** "
             f"servera **{ctx.guild.name}**."
         ),
         color=_LP,
@@ -7407,28 +7422,28 @@ async def poruka(
 
     if ucitavanje_greska and poslato == 0 and preskoceno == 0:
         final_embed = discord.Embed(
-            title="⚠️ Slanje nije pokrenuto",
+            title=f"{PORUKA_CUSTOM_EMOJI['mail']} Slanje nije pokrenuto",
             description=(
-                "Nisam mogao učitati članove servera, pa poruka nije poslata. "
+                "> Nisam mogao učitati članove servera, pa poruka nije poslata. "
                 "U Discord Developer Portalu uključi **Server Members Intent**, "
                 "sačuvaj promjenu i restartuj bota."
             ),
             color=_LP,
         )
     else:
-        description = f"Slanje privatnih pozivnica za **{ctx.guild.name}** je završeno."
+        description = f"> Slanje privatnih pozivnica za **{ctx.guild.name}** je završeno."
         if dm_http_greske:
             description += (
-                f"\nOstale HTTP greške: **{dm_http_greske}**"
+                f"\n> Ostale HTTP greške: **{dm_http_greske}**"
                 + (f" (prva: {prva_dm_greska})." if prva_dm_greska else ".")
             )
         if ucitavanje_greska:
-            description += "\nUčitavanje članova je prekinuto; dio članova možda nije obrađen."
+            description += "\n> Učitavanje članova je prekinuto; dio članova možda nije obrađen."
         final_embed = discord.Embed(
             title=(
-                "⚠️ Slanje završeno"
+                f"{PORUKA_CUSTOM_EMOJI['mail']} Slanje završeno"
                 if dm_http_greske or ucitavanje_greska
-                else "✅ Slanje završeno"
+                else f"{PORUKA_CUSTOM_EMOJI['check']} Slanje završeno"
             ),
             description=description,
             color=_LP,
@@ -7439,7 +7454,7 @@ async def poruka(
             ("Botovi preskočeni", str(preskoceno)),
             ("DM odbijen", str(dm_odbijeno)),
         ):
-            final_embed.add_field(name=label, value=value, inline=True)
+            final_embed.add_field(name=label, value=f"> **{value}**", inline=True)
     final_embed.set_footer(text=f"{BOT_NAME} • .poruka / .poruke")
     await status_message.edit(content=None, embed=final_embed)
 

@@ -40,7 +40,7 @@ Slash komande se sinhronizuju pri pokretanju. Može biti potrebno kratko vreme d
 - Igrači klikću dugmad 1–9 ispod table; samo igrač koji je na potezu može odigrati.
 - Svaka komanda napravi svoju nezavisnu tablu, uključujući više partija u istom kanalu.
 - Svaka partija traje tačno 2 minuta od pokretanja. Po isteku dugmad se zaključavaju i partija više ne važi.
-- Embed prikazuje igrače, ko je na potezu i vreme isteka; X/O se vide na dugmadima posle poteza.
+- Kompaktan embed prikazuje samo ko je koga izazvao i relativno odbrojavanje do isteka; tekst je u blockquote stilu.
 - Pobeđuje prvi sa tri znaka u redu. Ako se tabla popuni, partija je nerešena.
 - Posle pobede bot šalje poseban embed i taguje pobednika.
 - Tabla je javna u kanalu da oba igrača mogu da igraju. Ostali članovi ne mogu praviti poteze.
@@ -59,7 +59,7 @@ Ostale postojeće igre zadržavaju svoje komande; meni je njihova brza pomoć. N
 
 ## Emoji-ji i izgled
 
-Poruke i dugmad koriste standardne Unicode emoji-je — ne zavise od uploadovanih emoji-ja, emoji ID-jeva ili pristupa Discord Developer Portal emoji-jima. Embedovi s jasno označenim naslovima sekcija prikazuju te sekcije kao odvojena Discord polja; kratka obaveštenja ostaju kompaktna. Postojeći embedovi i paneli zadržavaju tamni MONIKA stil; `/igre` i `.igre` sada prikazuju interaktivni panel.
+Većina poruka i dugmadi koristi standardne Unicode emoji-je. `.poruka`/`.poruke` koristi odabrane aplikacijske emoji-je koji su već mapirani u skripti i ne zahtevaju bot token u kodu. Tekst pozivnice i status embedovi koriste blockquote stil.
 
 ## Glavne funkcije
 
@@ -74,7 +74,7 @@ Poruke i dugmad koriste standardne Unicode emoji-je — ne zavise od uploadovani
 
 Za punu funkcionalnost botu trebaju dozvole da vidi kanale, šalje poruke i embedove, čita istoriju, koristi reakcije, upravlja kanalima i upravlja ulogama. Za automatsku ulogu botova uloga mora biti iznad uloge koja se dodeljuje. Ograniči dozvole na kanale i mogućnosti koje stvarno koristiš.
 
-Komande `.poruka` i `.poruke` su aliasi: šalju pozivnicu servera kroz privatne poruke, najviše 100 članova po pokretanju, i dostupne su samo vlasniku bota ili servera. Pozivna poruka ima klikabilan link i pregled servera bez spiska bot komandi; rezultat slanja se prikazuje u kompaktnom embedu. Primer: `.poruke https://discord.gg/tvoj-link 100`. Koristi ih samo u skladu sa pravilima Discorda i očekivanjima članova.
+Komande `.poruka` i `.poruke` su aliasi: šalju pozivnicu servera kroz privatne poruke, najviše 100 članova po pokretanju, i dostupne su samo vlasniku bota ili servera. Pozivna poruka ima klikabilan link i pregled servera bez spiska bot komandi; tekst i rezultat slanja prikazuju se u kompaktnim blockquote embedovima. Primer: `.poruke https://discord.gg/tvoj-link 100`. Koristi ih samo u skladu sa pravilima Discorda i očekivanjima članova.
 
 ## Napomene
 
