@@ -151,15 +151,25 @@ EMOJI_FALLBACKS = {
     "heart": "❤️", "layers": "📚", "dollar": "💵", "game": "🎮",
 }
 
-# Koristi standardne Unicode emoji-je u porukama i dugmadima.
-# Imena iz ranijih custom emoji zapisa ostaju mapirana samo radi konverzije
-# starih tekstova. .poruka koristi mali, odabrani skup app emoji-ja.
-APP_CUSTOM_EMOJI = CUSTOM_EMOJI.copy()
-PORUKA_CUSTOM_EMOJI = {
-    key: APP_CUSTOM_EMOJI[key]
-    for key in ("sparkles", "heart", "ticket", "calendar", "gift", "rocket", "game", "users", "mail", "check")
+# .poruka koristi custom emoji-je preuzete iz aplikacije pri pokretanju;
+# ako neki emoji nije dostupan, koristi se njegov Unicode fallback.
+PORUKA_CUSTOM_EMOJI_NAMES = {
+    "sparkles": "Sparkles",
+    "heart": "Heart",
+    "ticket": "Ticket",
+    "calendar": "Calendar",
+    "gift": "Gift",
+    "rocket": "Rocket",
+    "game": "Gamepad2",
+    "users": "Users",
+    "mail": "Mail",
+    "check": "Check",
 }
-PORUKA_CUSTOM_EMOJI_MARKUP = set(PORUKA_CUSTOM_EMOJI.values())
+PORUKA_CUSTOM_EMOJI = {
+    key: EMOJI_FALLBACKS[key]
+    for key in PORUKA_CUSTOM_EMOJI_NAMES
+}
+PORUKA_CUSTOM_EMOJI_MARKUP = set()
 CUSTOM_EMOJI_NAME_TO_UNICODE = {}
 for _key, _value in CUSTOM_EMOJI.items():
     _match = re.match(r"<a?:([^:>]+):\d+>$", _value)
@@ -240,9 +250,37 @@ _UNICODE_EMOJI_RE = re.compile(
 APPLICATION_EMOJIS_LOADED = False
 
 async def load_application_emojis():
-    """Zadrži kompatibilnost sa starim pozivom; više nisu potrebni custom emoji-ji."""
+    """Učitaj aplikacijske emoji-je za .poruka iz Discorda."""
     global APPLICATION_EMOJIS_LOADED
-    APPLICATION_EMOJIS_LOADED = True
+    if APPLICATION_EMOJIS_LOADED:
+        return
+    try:
+        application_emojis = await bot.fetch_application_emojis()
+        by_name = {
+            emoji.name.casefold(): emoji
+            for emoji in application_emojis
+            if getattr(emoji, "name", None)
+        }
+        loaded = 0
+        for key, emoji_name in PORUKA_CUSTOM_EMOJI_NAMES.items():
+            emoji = by_name.get(emoji_name.casefold())
+            if emoji:
+                markup = str(emoji)
+                PORUKA_CUSTOM_EMOJI[key] = markup
+                PORUKA_CUSTOM_EMOJI_MARKUP.add(markup)
+                loaded += 1
+        print(
+            f"[{BOT_NAME}] Učitano {loaded}/{len(PORUKA_CUSTOM_EMOJI_NAMES)} "
+            "aplikacijskih emoji-ja za .poruka."
+        )
+    except Exception as exc:
+        # Ostavlja Unicode fallback; nikad ne ispisuje token ili header-e.
+        print(
+            f"[{BOT_NAME}] Aplikacijski emoji-ji nisu učitani; "
+            f"koristim Unicode fallback ({type(exc).__name__})."
+        )
+    finally:
+        APPLICATION_EMOJIS_LOADED = True
 
 def welcome_emoji(guild, key: str) -> str:
     """Vrati obični Unicode emoji; ne zavisi od emoji-ja servera."""

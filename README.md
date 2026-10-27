@@ -59,7 +59,7 @@ Ostale postojeće igre zadržavaju svoje komande; meni je njihova brza pomoć. N
 
 ## Emoji-ji i izgled
 
-Većina poruka i dugmadi koristi standardne Unicode emoji-je. `.poruka`/`.poruke` koristi odabrane aplikacijske emoji-je koji su već mapirani u skripti i ne zahtevaju bot token u kodu. Tekst pozivnice i status embedovi koriste blockquote stil.
+Većina poruka i dugmadi koristi standardne Unicode emoji-je. `.poruka`/`.poruke` pri pokretanju učita odabrane emoji-je iz aplikacije u Discord Developer Portalu; ako neki nije dostupan, koristi se Unicode fallback. Token se čita iz `DISCORD_TOKEN` okruženja/Secrets, nikad iz koda. Tekst pozivnice i status embedovi koriste blockquote stil.
 
 ## Glavne funkcije
 
