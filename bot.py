@@ -262,6 +262,7 @@ async def poruka(
     sent = 0
     bots_skipped = 0
     dm_blocked = 0
+    dm_forbidden_codes: dict[str, int] = {}
     http_errors = 0
     member_load_failed = False
 
@@ -280,8 +281,14 @@ async def poruka(
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 sent += 1
-            except discord.Forbidden:
+            except discord.Forbidden as exc:
                 dm_blocked += 1
+                code = str(exc.code)
+                dm_forbidden_codes[code] = dm_forbidden_codes.get(code, 0) + 1
+                print(
+                    f"[PORUKA] Discord je odbio DM za člana {member.id}: "
+                    f"HTTP {exc.status}, kod {exc.code}"
+                )
             except discord.HTTPException as exc:
                 http_errors += 1
                 print(
@@ -293,20 +300,48 @@ async def poruka(
         member_load_failed = True
         print(f"[PORUKA] Učitavanje članova nije uspelo: {exc}")
 
+    if member_load_failed:
+        result_title = "Slanje nije završeno"
+        result_description = (
+            "Učitavanje članova nije uspelo; deo članova možda nije obrađen. "
+            "Proveri Server Members Intent."
+        )
+    elif attempted > 0 and sent == 0:
+        result_title = "Nijedna pozivnica nije poslata"
+        result_description = (
+            "Discord je odbio sve pokušane privatne poruke. "
+            "Bot ne može da zaobiđe DM ograničenja članova. "
+            "Objavi pozivni link u kanalu da bi bio dostupan svima."
+        )
+    elif attempted == 0:
+        result_title = "Nema primalaca za slanje"
+        result_description = "Nije pronađen nijedan član kome se može poslati DM."
+    else:
+        result_title = "Slanje pozivnice završeno"
+        result_description = f"Završeno za server **{guild_name}**."
+
     result = discord.Embed(
-        title="Slanje pozivnice završeno",
-        description=(
-            "Učitavanje članova nije uspelo; deo članova možda nije obrađen."
-            if member_load_failed
-            else f"Završeno za server **{guild_name}**."
+        title=result_title,
+        description=result_description,
+        color=(
+            discord.Color.red()
+            if sent == 0
+            else discord.Color.orange()
+            if member_load_failed or http_errors
+            else discord.Color.green()
         ),
-        color=discord.Color.orange() if member_load_failed else discord.Color.green(),
     )
     result.add_field(name="Pokušano", value=str(attempted), inline=True)
     result.add_field(name="Poslato", value=str(sent), inline=True)
     result.add_field(name="Botovi preskočeni", value=str(bots_skipped), inline=True)
     result.add_field(name="DM odbijen", value=str(dm_blocked), inline=True)
     result.add_field(name="HTTP greške", value=str(http_errors), inline=True)
+    if dm_forbidden_codes:
+        codes = ", ".join(
+            f"{code} ({count}×)"
+            for code, count in sorted(dm_forbidden_codes.items())
+        )
+        result.add_field(name="Discord kod odbijanja", value=codes, inline=False)
     await status.edit(content=None, embed=result)
 
 
@@ -316,7 +351,7 @@ async def on_command_error(
     error: commands.CommandError,
 ) -> None:
     if isinstance(error, commands.CommandNotFound):
-        await ctx.send("Dostupne su samo komande `.xo` i `.poruka`.")
+        return
     elif isinstance(error, commands.MissingPermissions):
         await ctx.send("Komandu `.poruka` mogu koristiti samo administratori servera.")
     elif isinstance(error, commands.NoPrivateMessage):
