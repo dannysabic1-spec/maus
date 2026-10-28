@@ -9,6 +9,9 @@ from discord.ext import commands
 BOT_NAME = "MONIKA BOT"
 XO_TIMEOUT_SECONDS = 120
 MAX_INVITE_RECIPIENTS = 100
+XO_ACTIVE_GAMES = {}
+XO_CREATE_LOCK = asyncio.Lock()
+_EMBED_COLOR = 0x2B2D31
 
 
 class MinimalBot(commands.Bot):
@@ -30,30 +33,26 @@ bot = MinimalBot(
 
 
 def xo_embed(view: "XOView") -> discord.Embed:
-    x_name = discord.utils.escape_markdown(view.player_x.display_name)
-    o_name = discord.utils.escape_markdown(view.player_o.display_name)
-    embed = discord.Embed(
-        title="⭕ XO duel",
-        description=(
-            f"**X:** {x_name}\n"
-            f"**O:** {o_name}\n\n"
-            f"{view.status}"
-        ),
-        color=discord.Color.blurple(),
-    )
-    if view.finished:
-        embed.set_footer(text="Partija je završena.")
+    if view.expired:
+        time_text = "isteklo"
+    elif view.finished:
+        time_text = "završeno"
     else:
-        embed.set_footer(text="Klikni polje na tabli. Partija traje najviše 2 minuta.")
-    return embed
+        time_text = f"<t:{view.expires_at}:R>"
+    description = (
+        f"> {view.player_x.mention} izazvao/la je {view.player_o.mention}\n"
+        f"> ⏱️ Time: {time_text}"
+    )
+    return discord.Embed(description=description, color=_EMBED_COLOR)
 
 
 class XOButton(discord.ui.Button["XOView"]):
-    def __init__(self, position: int):
+    def __init__(self, position: int, game_id: str):
         super().__init__(
             label=str(position + 1),
             style=discord.ButtonStyle.secondary,
             row=position // 3,
+            custom_id=f"xo:{game_id}:{position}",
         )
         self.position = position
 
@@ -63,17 +62,29 @@ class XOButton(discord.ui.Button["XOView"]):
 
 class XOView(discord.ui.View):
     def __init__(self, player_x: discord.abc.User, player_o: discord.abc.User):
-        super().__init__(timeout=XO_TIMEOUT_SECONDS)
+        super().__init__(timeout=None)
         self.player_x = player_x
         self.player_o = player_o
         self.board = [""] * 9
         self.current_player = player_x
         self.finished = False
+        self.expired = False
+        self.game_id = os.urandom(6).hex()
+        self.deadline = asyncio.get_running_loop().time() + XO_TIMEOUT_SECONDS
+        self.expires_at = int(discord.utils.utcnow().timestamp()) + XO_TIMEOUT_SECONDS
         self.message: discord.Message | None = None
         self.move_lock = asyncio.Lock()
-        self.status = f"Potez je na **{player_x.display_name} (X)**."
+        self.expiry_task: asyncio.Task | None = None
         for position in range(9):
-            self.add_item(XOButton(position))
+            self.add_item(XOButton(position, self.game_id))
+
+    def start_expiry_timer(self) -> None:
+        self.expiry_task = asyncio.create_task(self.expire_after_timeout())
+
+    def cancel_expiry_timer(self) -> None:
+        task = self.expiry_task
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
 
     @staticmethod
     def winning_line(board: list[str]) -> bool:
@@ -114,6 +125,19 @@ class XOView(discord.ui.View):
                 )
                 return
 
+            if asyncio.get_running_loop().time() >= self.deadline:
+                self.finished = True
+                self.expired = True
+                self.refresh_buttons()
+                XO_ACTIVE_GAMES.pop(self.game_id, None)
+                self.cancel_expiry_timer()
+                await interaction.response.edit_message(
+                    embed=xo_embed(self),
+                    view=self,
+                )
+                self.stop()
+                return
+
             if interaction.user.id not in (self.player_x.id, self.player_o.id):
                 await interaction.response.send_message(
                     "Ova tabla je samo za igrače koje je izazivač odabrao.",
@@ -138,23 +162,14 @@ class XOView(discord.ui.View):
             mark = "X" if interaction.user.id == self.player_x.id else "O"
             self.board[position] = mark
 
-            if self.winning_line(self.board):
+            winning_line = self.winning_line(self.board)
+            if winning_line:
                 self.finished = True
-                self.status = (
-                    f"🏆 **{discord.utils.escape_markdown(interaction.user.display_name)} "
-                    f"pobeđuje kao {mark}!**"
-                )
             elif all(self.board):
                 self.finished = True
-                self.status = "🤝 **Nerešeno — tabla je puna.**"
             else:
                 self.current_player = (
                     self.player_o if mark == "X" else self.player_x
-                )
-                self.status = (
-                    f"Potez je na **"
-                    f"{discord.utils.escape_markdown(self.current_player.display_name)} "
-                    f"({'O' if mark == 'X' else 'X'})**."
                 )
 
             self.refresh_buttons()
@@ -163,20 +178,48 @@ class XOView(discord.ui.View):
                 view=self,
             )
             if self.finished:
+                XO_ACTIVE_GAMES.pop(self.game_id, None)
+                self.cancel_expiry_timer()
                 self.stop()
+                if winning_line:
+                    winner_embed = discord.Embed(
+                        title="🏆 Pobjeda u XO!",
+                        description=f"> {interaction.user.mention} je pobedio/la!",
+                        color=_EMBED_COLOR,
+                    )
+                    try:
+                        await self.message.channel.send(
+                            embed=winner_embed,
+                            allowed_mentions=discord.AllowedMentions(
+                                users=[interaction.user],
+                                replied_user=False,
+                            ),
+                        )
+                    except discord.HTTPException as exc:
+                        print(f"[XO] Nije poslat embed pobednika: {exc}")
 
-    async def on_timeout(self) -> None:
-        async with self.move_lock:
-            if self.finished:
-                return
-            self.finished = True
-            self.status = "⏰ **Vreme je isteklo — partija više ne važi.**"
-            self.refresh_buttons()
-            if self.message is not None:
-                try:
-                    await self.message.edit(embed=xo_embed(self), view=self)
-                except discord.HTTPException as exc:
-                    print(f"[XO] Tabla nije mogla biti ažurirana: {exc}")
+    async def expire_after_timeout(self) -> None:
+        try:
+            remaining = max(
+                0,
+                self.deadline - asyncio.get_running_loop().time(),
+            )
+            await asyncio.sleep(remaining)
+            async with self.move_lock:
+                if self.finished:
+                    return
+                self.finished = True
+                self.expired = True
+                self.refresh_buttons()
+                XO_ACTIVE_GAMES.pop(self.game_id, None)
+                if self.message is not None:
+                    try:
+                        await self.message.edit(embed=xo_embed(self), view=self)
+                    except discord.HTTPException as exc:
+                        print(f"[XO] Tabla nije mogla biti ažurirana: {exc}")
+                self.stop()
+        except asyncio.CancelledError:
+            return
 
 
 @bot.command(name="xo")
@@ -192,12 +235,16 @@ async def xo(ctx: commands.Context, protivnik: discord.Member = None) -> None:
         await ctx.send("Izaberi drugog člana servera koji nije bot.")
         return
 
-    view = XOView(ctx.author, protivnik)
-    view.message = await ctx.send(
-        embed=xo_embed(view),
-        view=view,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    async with XO_CREATE_LOCK:
+        view = XOView(ctx.author, protivnik)
+        message = await ctx.send(
+            embed=xo_embed(view),
+            view=view,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        view.message = message
+        XO_ACTIVE_GAMES[view.game_id] = view
+        view.start_expiry_timer()
 
 
 def valid_invite_link(value: str) -> str | None:
