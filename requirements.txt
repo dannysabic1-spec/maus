@@ -1,2 +1,1 @@
 discord.py>=2.4,<3.0
-wordfreq>=3.1
